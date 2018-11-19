@@ -32,7 +32,7 @@
             }, options),
 
             providers: /google|openstreetmap|mapbox/,
-            searchProviders: /google/,
+            searchProviders: /google|yandex/,
 
             render: function() {
                 this.$id = $('#' + this.options.id);
@@ -52,7 +52,7 @@
                 this.loadAll(function(){
                     var mapOptions = self._getMapOptions(),
                         map = self._getMap(mapOptions);
-        
+
                     var marker = self._getMarker(map, mapOptions.center);
 
                     // fix issue w/ marker not appearing
@@ -69,17 +69,48 @@
             },
 
             search: function(map, marker, address) {
-                var googleGeocodeProvider = new L.GeoSearch.Provider.Google();
+                if (this.options.searchProvider === 'google') {
+                    var googleGeocodeProvider = new L.GeoSearch.Provider.Google();
 
-                googleGeocodeProvider.GetLocations(address, function(data) {
-                    if (data.length > 0) {
-                        var result = data[0],
-                            latLng = new L.LatLng(result.Y, result.X);
+                    googleGeocodeProvider.GetLocations(address, function(data) {
+                        if (data.length > 0) {
+                            var result = data[0],
+                                latLng = new L.LatLng(result.Y, result.X);
 
-                        marker.setLatLng(latLng);
-                        map.panTo(latLng);
+                            marker.setLatLng(latLng);
+                            map.panTo(latLng);
+                        }
+                    });
+                }
+
+                else if (this.options.searchProvider === 'yandex') {
+                    var url = '//geocode-maps.yandex.ru/1.x/?format=json&geocode=' + address;
+
+                    if (typeof this.options.providerOptions.yandex.apiKey !== 'undefined') {
+                        url += '&apikey=' + this.options.providerOptions.yandex.apiKey;
                     }
-                });
+
+                    var request = new XMLHttpRequest();
+                    request.open('GET', url, true);
+
+                    request.onload = function () {
+                        if (request.status >= 200 && request.status < 400) {
+                            var data = JSON.parse(request.responseText);
+                            var pos = data.response.GeoObjectCollection.featureMember[0].GeoObject.Point.pos.split(' ');
+                            var latLng = new L.LatLng(pos[1], pos[0]);
+                            marker.setLatLng(latLng);
+                            map.panTo(latLng);
+                        } else {
+                            console.error('Yandex geocoder error response');
+                        }
+                    };
+
+                    request.onerror = function () {
+                        console.error('Check connection to Yandex geocoder');
+                    };
+
+                    request.send();
+                }
             },
 
             loadAll: function(onload) {
@@ -156,6 +187,10 @@
 
                         onload();
                     });
+                },
+
+                yandexSearchProvider: function (options, onload) {
+                    onload();
                 },
 
                 mapbox: function(options, onload) {
@@ -238,7 +273,7 @@
                     layer = new L.tileLayer(
                         'https://api.tiles.mapbox.com/v4/{id}/{z}/{x}/{y}.png?access_token={accessToken}', {
                             maxZoom: 18,
-                            accessToken: 'pk.eyJ1IjoibWFwYm94IiwiYSI6IjZjNmRjNzk3ZmE2MTcwOTEwMGY0MzU3YjUzOWFmNWZhIn0.Y8bhBaUMqFiPrDRW9hieoQ',
+                            accessToken: this.options.providerOptions.mapbox.access_token,
                             id: 'mapbox.streets'
                         });
                 }
@@ -282,16 +317,21 @@
 
             _watchBasedFields: function(map, marker) {
                 var self = this,
+                    basedFields = this.options.basedFields,
                     onchangeTimer,
                     onchange = function() {
-                        var value = $(this).val();
+                        var values = basedFields.map(function() {
+                            var value = $(this).val();
+                            return value === '' ? null : value;
+                        });
+                        var address = values.toArray().join(', ');
                         clearTimeout(onchangeTimer);
                         onchangeTimer = setTimeout(function(){
-                            self.search(map, marker, value);
+                            self.search(map, marker, address);
                         }, 300);
                     };
 
-                this.options.basedFields.each(function(){
+                basedFields.each(function(){
                     var el = $(this);
 
                     if (el.is('select'))
@@ -334,7 +374,13 @@
                         api: options['provider.google.api'],
                         apiKey: options['provider.google.api_key'],
                         mapType: options['provider.google.map_type']
-                    }
+                    },
+                    mapbox: {
+                        access_token: options['provider.mapbox.access_token']
+                    },
+                    yandex: {
+                        apiKey: options['provider.yandex.api_key']
+                    },
                 },
                 mapOptions: {
                     zoom: options['map.zoom']
